@@ -1,0 +1,63 @@
+---
+title: "q4"
+output: html_document
+date: "2024-08-11"
+---
+
+```{r}
+filename1 <- "C:/Users/29187/Desktop/C/input_data/df_past_order.csv"
+past_order <- read.csv(filename1)
+col_names <- c("Name", "SKU", 1:23)
+colnames(past_order) <- col_names
+library(openxlsx)
+```
+
+```{r}
+# 初始化一个空的dataframe用于存储生成的需求量
+simulated_df <- data.frame(matrix(ncol = 365, nrow = nrow(past_order)))
+
+# 设置列名（可以是日期）
+colnames(simulated_df) <- paste0("Day_", 1:365)
+
+# 对每一天的数据进行处理
+for (d in 1:365) {  # 循环365天
+  # 为这一天生成一个随机数
+  random_value <- runif(1)
+  
+  for (i in 1:nrow(past_order)) {
+    # 提取当前城市的需求量数据
+    demand_data <- as.numeric(past_order[i, 3:25])  # 假设3到25列为需求数据
+    
+    # 计算极差，用于确定波动范围
+    demand_range <- max(demand_data) - min(demand_data)
+    
+    # 拟合经验分布函数
+    empirical_cdf <- ecdf(demand_data)
+
+    # 使用当天的随机数从经验分布中抽样
+    sampled_value <- quantile(demand_data, probs = random_value)
+    
+    # 为抽样值引入随机波动
+    fluctuation <- rnorm(1, mean = 0, sd = 0.1 * demand_range)
+    
+    # 计算最终的模拟需求量
+    simulated_demand <- sampled_value + fluctuation
+    
+    # 将模拟需求量存储到数据框中
+    simulated_df[i, d] <- simulated_demand
+  }
+}
+
+# 为 simulated_df 添加城市名称列（假设第一列是城市名称）
+simulated_df <- cbind(City = past_order[, 1], simulated_df)
+
+# 设置文件保存路径
+desktop_path <- normalizePath("~/Desktop")
+file_path <- "C:/Users/29187/Desktop"
+
+# 将数据写入桌面的 Excel 表格
+write.xlsx(simulated_df, file = file_path, rowNames = FALSE)
+
+# 输出保存路径以便确认
+cat("模拟的需求量数据已成功保存到:", file_path, "\n")
+```

@@ -1,0 +1,796 @@
+---
+title: "q3"
+output: html_document
+date: "2024-08-09"
+---
+
+```{r}
+filename1 <- "C:/Users/29187/Desktop/高速运转建模进入ZJU/火花杯/C/input_data/df_past_order.csv"
+past_order <- read.csv(filename1)
+col_names <- c("Name", "SKU", 1:23)
+colnames(past_order) <- col_names
+filename2 <- "C:/Users/29187/Desktop/高速运转建模进入ZJU/火花杯/C/input_data/df_loc.csv"
+loc <- read.csv(filename2)
+
+library(tidyverse)
+library(forecast)
+library(randomForest)
+library(ggplot2)
+```
+
+```{r}
+df_shanghai <- data.frame(
+  Day = 1:23,  # 天数
+  Demand = as.numeric(past_order[1, 3:25])  # 需求量
+)
+
+# 使用 ggplot 绘制折线图并添加数据点
+shanghai <- ggplot(df_shanghai, aes(x = Day, y = Demand)) +
+  geom_line(color = "blue") +               # 设置折线颜色
+  geom_point(color = "red", size = 2) +     # 添加数据点
+  labs(title = "上海市国产水果需求量", x = "Day(2016/6/)", y = "Demand/ton") +
+  theme_minimal()
+
+df_shaoxing <- data.frame(
+  Day = 1:23,  # 天数
+  Demand = as.numeric(past_order[83, 3:25])  # 需求量
+)
+
+# 使用 ggplot 绘制折线图并添加数据点
+shaoxing <- ggplot(df_shaoxing, aes(x = Day, y = Demand)) +
+  geom_line(color = "blue") +               # 设置折线颜色
+  geom_point(color = "red", size = 2) +     # 添加数据点
+  labs(title = "绍兴市国产水果需求量", x = "Day(2016/6/)", y = "Demand/ton") +
+  theme_minimal()
+
+df_beijing <- data.frame(
+  Day = 1:23,  # 天数
+  Demand = as.numeric(past_order[122, 3:25])  # 需求量
+)
+
+# 使用 ggplot 绘制折线图并添加数据点
+beijing <- ggplot(df_beijing, aes(x = Day, y = Demand)) +
+  geom_line(color = "blue") +               # 设置折线颜色
+  geom_point(color = "red", size = 2) +     # 添加数据点
+  labs(title = "北京市进口水果需求量", x = "Day(2016/6/)", y = "Demand/ton") +
+  theme_minimal()
+
+df_hangzhou <- data.frame(
+  Day = 1:23,  # 天数
+  Demand = as.numeric(past_order[163, 3:25])  # 需求量
+)
+
+# 使用 ggplot 绘制折线图并添加数据点
+hangzhou <- ggplot(df_hangzhou, aes(x = Day, y = Demand)) +
+  geom_line(color = "blue") +               # 设置折线颜色
+  geom_point(color = "red", size = 2) +     # 添加数据点
+  labs(title = "杭州市进口水果需求量", x = "Day(2016/6/)", y = "Demand/ton") +
+  theme_minimal()
+
+ggsave("shanghai.jpg", plot = shanghai, width = 8, height = 6, dpi = 300)
+ggsave("shaoxing.jpg", plot = shaoxing, width = 8, height = 6, dpi = 300)
+ggsave("beijing.jpg", plot = beijing, width = 8, height = 6, dpi = 300)
+ggsave("hangzhou.jpg", plot = hangzhou, width = 8, height = 6, dpi = 300)
+
+shanghai
+shaoxing
+beijing
+hangzhou
+```
+
+注意到订单数量具有周期性，在一周内有涨落变化因此使用SARIMA（即季节性SARIMA）时间序列分析模型进行预测
+```{r}
+# 初始化数据框用于存储SARIMA模型的预测结果和RMSE
+sarima_forecast_df <- data.frame(Name = character(), SKU = character(), 
+                                 `24` = numeric(), `25` = numeric(), `26` = numeric(), 
+                                 `27` = numeric(), `28` = numeric(), `29` = numeric(), 
+                                 `30` = numeric(), RMSE = numeric(), stringsAsFactors = FALSE)
+
+# 设置SARIMA模型参数
+p <- 1  # 自回归项阶数
+d <- 1  # 差分阶数
+q <- 1  # 移动平均项阶数
+
+P <- 0  # 季节性自回归项阶数（设置为0以简化模型）
+D <- 1  # 季节性差分阶数
+Q <- 0  # 季节性移动平均项阶数（设置为0以简化模型）
+m <- 7  # 季节长度（7天为一个周期）
+
+for (i in 1:nrow(past_order)) {
+  # 提取门店名称和商品类型
+  store_name <- past_order[i, "Name"]
+  sku_type <- past_order[i, "SKU"]
+  
+  # 提取该门店的历史订单数据
+  order_lst <- as.numeric(past_order[i, 3:ncol(past_order)])
+  
+  # 将数据分成训练集和验证集
+  train_size <- 0.8
+  train_length <- floor(length(order_lst) * train_size)
+  train_order_lst <- order_lst[1:train_length]
+  validation_order_lst <- order_lst[(train_length + 1):length(order_lst)]
+  
+  # 建立SARIMA模型，使用不同的优化方法
+  sarima_model <- tryCatch(
+    {
+      Arima(train_order_lst, order = c(p, d, q), 
+            seasonal = list(order = c(P, D, Q), period = m), 
+            method = "ML")  # 使用最大似然估计法
+    },
+    error = function(e) {
+      # 如果模型无法收敛，返回错误对象
+      e
+    }
+  )
+  
+  # 检查模型是否成功
+  if (!inherits(sarima_model, "error")) {
+    # 使用SARIMA模型进行预测
+    sarima_forecast <- forecast(sarima_model, h = 7)
+    
+    # 计算RMSE
+    if (length(validation_order_lst) > 0) {
+      sarima_rmse <- sqrt(mean((sarima_forecast$mean[1:length(validation_order_lst)] - validation_order_lst)^2))
+    } else {
+      sarima_rmse <- NA
+    }
+    
+    # 将SARIMA模型预测结果和RMSE存储到数据框
+    sarima_forecast_df <- rbind(sarima_forecast_df, 
+                                data.frame(Name = store_name, SKU = sku_type,
+                                           `24` = round(sarima_forecast$mean[1], 2),
+                                           `25` = round(sarima_forecast$mean[2], 2),
+                                           `26` = round(sarima_forecast$mean[3], 2),
+                                           `27` = round(sarima_forecast$mean[4], 2),
+                                           `28` = round(sarima_forecast$mean[5], 2),
+                                           `29` = round(sarima_forecast$mean[6], 2),
+                                           `30` = round(sarima_forecast$mean[7], 2),
+                                           RMSE = round(sarima_rmse, 2)))
+  } else {
+    # 如果模型未成功，填充空白数据并将RMSE设为NA
+    sarima_forecast_df <- rbind(sarima_forecast_df, 
+                                data.frame(Name = store_name, SKU = sku_type,
+                                           `24` = NA, `25` = NA, `26` = NA,
+                                           `27` = NA, `28` = NA, `29` = NA, `30` = NA,
+                                           RMSE = NA))
+  }
+}
+
+# 查看SARIMA模型预测结果和RMSE
+print(sarima_forecast_df)
+
+```
+
+```{r}
+# 初始化数据框用于存储ETS模型的预测结果和RMSE
+ets_forecast_df <- data.frame(Name = character(), SKU = character(), 
+                              `24` = numeric(), `25` = numeric(), `26` = numeric(), 
+                              `27` = numeric(), `28` = numeric(), `29` = numeric(), 
+                              `30` = numeric(), RMSE = numeric(), stringsAsFactors = FALSE)
+
+for (i in 1:nrow(past_order)) {
+  # 提取门店名称和商品类型
+  store_name <- past_order[i, "Name"]
+  sku_type <- past_order[i, "SKU"]
+  
+  # 提取该门店的历史订单数据
+  order_lst <- as.numeric(past_order[i, 3:ncol(past_order)])
+  
+  # 检查数据长度和完整性
+  if (length(order_lst) != 23 || any(is.na(order_lst))) {
+    # 如果数据长度不符合要求，跳过该门店
+    ets_forecast_df <- rbind(ets_forecast_df, 
+                             data.frame(Name = store_name, SKU = sku_type,
+                                        `24` = NA, `25` = NA, `26` = NA,
+                                        `27` = NA, `28` = NA, `29` = NA, `30` = NA,
+                                        RMSE = NA))
+    next
+  }
+  
+  # 将数据分成训练集（前18个）和验证集（最后5个）
+  train_order_lst <- order_lst[1:18]
+  validation_order_lst <- order_lst[19:23]
+  
+  # 建立ETS模型
+  ets_model <- tryCatch(
+    {
+      ets(train_order_lst)  # 让ETS模型自动选择最佳模型
+    },
+    error = function(e) {
+      return(NULL)
+    }
+  )
+
+  if (!is.null(ets_model)) {
+    # 使用ETS模型进行预测
+    ets_forecast <- forecast(ets_model, h = 7)
+    
+    # 计算RMSE（验证集的前5个点）
+    if (length(validation_order_lst) > 0) {
+      ets_rmse <- sqrt(mean((ets_forecast$mean[1:length(validation_order_lst)] - validation_order_lst)^2))
+    } else {
+      ets_rmse <- NA
+    }
+    
+    # 将ETS模型预测结果和RMSE存储到数据框
+    ets_forecast_df <- rbind(ets_forecast_df, 
+                             data.frame(Name = store_name, SKU = sku_type,
+                                        `24` = round(ets_forecast$mean[1], 2),
+                                        `25` = round(ets_forecast$mean[2], 2),
+                                        `26` = round(ets_forecast$mean[3], 2),
+                                        `27` = round(ets_forecast$mean[4], 2),
+                                        `28` = round(ets_forecast$mean[5], 2),
+                                        `29` = round(ets_forecast$mean[6], 2),
+                                        `30` = round(ets_forecast$mean[7], 2),
+                                        RMSE = round(ets_rmse, 2)))
+  } else {
+    # 如果模型未成功，填充空白数据并将RMSE设为NA
+    ets_forecast_df <- rbind(ets_forecast_df, 
+                             data.frame(Name = store_name, SKU = sku_type,
+                                        `24` = NA, `25` = NA, `26` = NA,
+                                        `27` = NA, `28` = NA, `29` = NA, `30` = NA,
+                                        RMSE = NA))
+  }
+}
+
+# 查看ETS模型预测结果和RMSE
+print(ets_forecast_df)
+
+```
+
+
+用随机森林模型，加入星期、gdp、人口数等的影响进行分析。
+```{r}
+# 初始化数据框用于存储随机森林模型的预测结果
+rf_forecast_df <- data.frame(Name = character(), SKU = character(), 
+                             `24` = numeric(), `25` = numeric(), `26` = numeric(), 
+                             `27` = numeric(), `28` = numeric(), `29` = numeric(), 
+                             `30` = numeric(), RMSE = numeric(), stringsAsFactors = FALSE)
+
+for (i in 1:nrow(past_order)) {
+  # 提取门店名称和商品类型
+  store_name <- past_order[i, "Name"]
+  sku_type <- past_order[i, "SKU"]
+  
+  # 提取该门店的历史订单数据
+  order_lst <- as.numeric(past_order[i, 3:ncol(past_order)])
+
+  # 处理城市名称匹配问题
+  city_match <- loc$Location[grep(store_name, loc$Location)]
+
+  # 如果无法直接匹配, 尝试去掉store_name中的后缀-shi再匹配
+  if (length(city_match) == 0) {
+    city_name_no_suffix <- gsub("-shi$", "", store_name)
+    city_match <- loc$Location[grep(city_name_no_suffix, loc$Location)]
+  }
+
+  # 使用找到的城市名称进行匹配
+  if (length(city_match) > 0) {
+    city_name <- city_match[1]  # 取第一个匹配的城市名称
+  } else {
+    city_name <- NA  # 如果没有匹配的城市，设置为NA
+  }
+
+  # 获取城市的居民人口和GDP信息
+  if (!is.na(city_name)) {
+    population <- loc$resident_pop[loc$Location == city_name]
+    gdp <- loc$gdp[loc$Location == city_name]
+  } else {
+    population <- NA
+    gdp <- NA
+  }
+
+  # 创建周特征，订单数据从2016-6-1开始
+  weekday <- c(3, 4, 5, 6, 7, 1, 2)
+  week_feature <- rep(weekday, length.out = 30)
+  
+  # 将周一、周六、周日设为需求量较高
+  demand_boost <- ifelse(week_feature == 1, 1, 0) + 
+                  ifelse(week_feature == 6, 1, 0) + 
+                  ifelse(week_feature == 7, 2, 0)
+
+  # 构建训练集和验证集
+  train_order_lst <- order_lst[1:23]  # 6月1日至6月23日为训练集
+  validation_order_lst <- order_lst[18:23]  # 6月18日至6月23日为验证集
+  
+  train_demand_boost <- demand_boost[1:23]
+  validation_demand_boost <- demand_boost[18:23]
+  
+  train_data <- data.frame(Order = train_order_lst, 
+                           DemandBoost = train_demand_boost,
+                           Population = rep(population, length(train_order_lst)),
+                           GDP = rep(gdp, length(train_order_lst)))
+  
+  validation_data <- data.frame(Order = validation_order_lst, 
+                                DemandBoost = validation_demand_boost,
+                                Population = rep(population, length(validation_order_lst)),
+                                GDP = rep(gdp, length(validation_order_lst)))
+
+  # 构建随机森林模型
+  rf_model <- randomForest(Order ~ ., data = train_data, ntree = 500)
+
+  # 使用模型预测验证集
+  validation_forecast <- predict(rf_model, newdata = validation_data)
+  
+  # 使用模型进行预测，预测未来7天的订单
+  future_demand_boost <- demand_boost[24:30]  # 对应24号到30号
+  future_data <- data.frame(DemandBoost = future_demand_boost, 
+                            Population = rep(population, 7),
+                            GDP = rep(gdp, 7))
+  
+  rf_forecast <- predict(rf_model, newdata = future_data)
+
+  # 计算验证集的 RMSE
+  rmse <- sqrt(mean((validation_forecast - validation_order_lst)^2))
+  
+  # 将预测结果和RMSE存储到数据框
+  rf_forecast_df <- rbind(rf_forecast_df, 
+                          data.frame(Name = store_name, SKU = sku_type,
+                                     `24` = round(rf_forecast[1], 2),
+                                     `25` = round(rf_forecast[2], 2),
+                                     `26` = round(rf_forecast[3], 2),
+                                     `27` = round(rf_forecast[4], 2),
+                                     `28` = round(rf_forecast[5], 2),
+                                     `29` = round(rf_forecast[6], 2),
+                                     `30` = round(rf_forecast[7], 2),
+                                     RMSE = round(rmse, 2)))
+}
+
+# 查看随机森林模型预测结果和RMSE
+print(rf_forecast_df)
+
+```
+可视化，以上海市国产水果为例
+```{r}
+# 提取对应城市的数据
+shanghai_data <- past_order[past_order$Name == "shang-hai-shi" & past_order$SKU == "dm", ]
+
+# 提取实际订单数据并计算其长度
+actual_order_lst <- as.numeric(shanghai_data[1, 3:ncol(shanghai_data)])
+actual_length <- length(actual_order_lst)
+
+# 确保实际订单数据的长度为23天（如果不足，则用NA补充）
+if (actual_length < 23) {
+  actual_order_lst <- c(actual_order_lst, rep(NA, 23 - actual_length))
+} else {
+  actual_order_lst <- actual_order_lst[1:23]
+}
+
+# 提取三种模型的预测结果
+sarima_forecast <- sarima_forecast_df[sarima_forecast_df$Name == "shang-hai-shi", ]
+ets_forecast <- ets_forecast_df[ets_forecast_df$Name == "shang-hai-shi", ]
+rf_forecast <- rf_forecast_df[rf_forecast_df$Name == "shang-hai-shi", ]
+
+# 整合到一个数据框中
+forecast_df <- data.frame(
+  Date = 1:30,
+  Actual = c(actual_order_lst, rep(NA, predicted_length)),  # 确保实际数据+预测数据总长度为30天
+  SARIMA = c(actual_order_lst, as.numeric(sarima_forecast[1, 3:(3 + predicted_length - 1)])),
+  ETS = c(actual_order_lst, as.numeric(ets_forecast[1, 3:(3 + predicted_length - 1)])),
+  RandomForest = c(actual_order_lst, as.numeric(rf_forecast[1, 3:(3 + predicted_length - 1)]))
+)
+
+# 将数据转换为长格式，以便 ggplot2 绘图
+forecast_df_long <- forecast_df %>%
+  gather(key = "Model", value = "Order", -Date)
+
+# 绘制折线图
+p1 <- ggplot(SARIMA1_df_long, aes(x = Date, y = Order, color = Model, group = Model)) +
+  # 先绘制模型
+  geom_line(data = subset(forecast_df_long, Model != "Actual"), size = 1, alpha = 0.7) +  
+  geom_point(data = subset(forecast_df_long, Model != "Actual"), size = 2, alpha = 0.7) +
+  # 最后绘制'Actual'模型，这样它会覆盖其他模型
+  geom_line(data = subset(forecast_df_long, Model == "Actual"), size = 1.5, alpha = 1) +  
+  geom_point(data = subset(forecast_df_long, Model == "Actual"), size = 3, alpha = 1) +
+  labs(title = "", 
+       x = "Date (2016/6/)", y = "Order Demand (ton)",
+       color = "Type") +
+  scale_x_continuous(breaks = 1:30) +  
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+# 保存图形
+ggsave("my_plot1.jpg", plot = p1, width = 8, height = 6, dpi = 300)
+```
+
+综合上述三种预测方法可以得到用SARIMA时间序列分析模型可以得到较好的预测结果，下面对不同的训练集和验证集的安排方式进行比较。
+
+分成两组
+```{r}
+# 设置SARIMA模型参数
+p <- 1  # 自回归项阶数
+d <- 1  # 差分阶数
+q <- 1  # 移动平均项阶数
+
+P <- 0  # 季节性自回归项阶数（设置为0以简化模型）
+D <- 1  # 季节性差分阶数
+Q <- 0  # 季节性移动平均项阶数（设置为0以简化模型）
+m <- 7  # 季节长度（7天为一个周期）
+
+# 初始化 SARIMA 预测结果数据框
+sarima2_forecast_df <- data.frame(Name = character(), SKU = character(), 
+                                  `24` = numeric(), `25` = numeric(), `26` = numeric(), 
+                                  `27` = numeric(), `28` = numeric(), `29` = numeric(), 
+                                  `30` = numeric(), RMSE = numeric(), stringsAsFactors = FALSE)
+
+# 定义每组的起始和结束位置
+groups <- list(c(1, 16),  # 第一组训练集：第1-16天
+               c(11, 22)) # 第二组训练集：第11-22天
+
+for (i in 1:nrow(past_order)) {
+  # 提取门店名称和商品类型
+  store_name <- past_order[i, "Name"]
+  sku_type <- past_order[i, "SKU"]
+  
+  # 提取该门店的历史订单数据
+  order_lst <- as.numeric(past_order[i, 3:ncol(past_order)])
+  
+  # 存储每组的预测值和RMSE
+  predictions <- matrix(NA, nrow = 7, ncol = length(groups))
+  rmses <- numeric(length(groups))
+  
+  for (j in seq_along(groups)) {
+    group <- groups[[j]]
+    start_train <- group[1]
+    end_train <- group[2]
+    
+    # 将数据分成训练集和验证集
+    train_order_lst <- order_lst[start_train:end_train]
+    validation_order_lst <- order_lst[(end_train + 1):23]
+    
+    # 建立SARIMA模型
+    sarima_model <- tryCatch(
+      {
+        Arima(train_order_lst, order = c(p, d, q), 
+              seasonal = list(order = c(P, D, Q), period = m), 
+              method = "ML")
+      },
+      error = function(e) {
+        # 如果模型无法收敛，返回错误对象
+        e
+      }
+    )
+    
+    # 检查模型是否成功
+    if (!inherits(sarima_model, "error")) {
+      # 使用SARIMA模型进行预测
+      sarima_forecast <- forecast(sarima_model, h = 7)
+      
+      # 计算RMSE
+      if (length(validation_order_lst) > 0) {
+        sarima_rmse <- sqrt(mean((sarima_forecast$mean[1:length(validation_order_lst)] - validation_order_lst)^2))
+      } else {
+        sarima_rmse <- NA
+      }
+      
+      # 存储预测结果和RMSE
+      predictions[, j] <- sarima_forecast$mean
+      rmses[j] <- sarima_rmse
+    }
+  }
+  
+  # 计算每个预测日的均值作为最终预测结果
+  final_forecast <- rowMeans(predictions, na.rm = TRUE)
+  final_rmse <- mean(rmses, na.rm = TRUE)
+  
+  # 将均值结果存储到数据框
+  sarima2_forecast_df <- rbind(sarima2_forecast_df, 
+                              data.frame(Name = store_name, SKU = sku_type,
+                                         `24` = round(final_forecast[1], 2),
+                                         `25` = round(final_forecast[2], 2),
+                                         `26` = round(final_forecast[3], 2),
+                                         `27` = round(final_forecast[4], 2),
+                                         `28` = round(final_forecast[5], 2),
+                                         `29` = round(final_forecast[6], 2),
+                                         `30` = round(final_forecast[7], 2),
+                                         RMSE = round(final_rmse, 2)))
+}
+
+# 查看SARIMA模型预测结果和RMSE
+print(sarima2_forecast_df)
+
+```
+
+分成三组
+```{r}
+# 设置SARIMA模型参数
+p <- 1  # 自回归项阶数
+d <- 1  # 差分阶数
+q <- 1  # 移动平均项阶数
+
+P <- 0  # 季节性自回归项阶数（设置为0以简化模型）
+D <- 1  # 季节性差分阶数
+Q <- 0  # 季节性移动平均项阶数（设置为0以简化模型）
+m <- 7  # 季节长度（7天为一个周期）
+
+# 初始化 SARIMA 预测结果数据框
+sarima3_forecast_df <- data.frame(Name = character(), SKU = character(), 
+                                 `24` = numeric(), `25` = numeric(), `26` = numeric(), 
+                                 `27` = numeric(), `28` = numeric(), `29` = numeric(), 
+                                 `30` = numeric(), RMSE = numeric(), stringsAsFactors = FALSE)
+
+# 定义每组的起始和结束位置
+groups <- list(c(1, 16),  # 第一组训练集：第1-16天
+               c(6, 21),  # 第二组训练集：第6-21天
+               c(11, 22)) # 第三组训练集：第11-22天
+
+for (i in 1:nrow(past_order)) {
+  # 提取门店名称和商品类型
+  store_name <- past_order[i, "Name"]
+  sku_type <- past_order[i, "SKU"]
+  
+  # 提取该门店的历史订单数据
+  order_lst <- as.numeric(past_order[i, 3:ncol(past_order)])
+  
+  # 存储每组的预测值和RMSE
+  predictions <- matrix(NA, nrow = 7, ncol = length(groups))
+  rmses <- numeric(length(groups))
+  
+  for (j in seq_along(groups)) {
+    group <- groups[[j]]
+    start_train <- group[1]
+    end_train <- group[2]
+    
+    # 将数据分成训练集和验证集
+    train_order_lst <- order_lst[start_train:end_train]
+    validation_order_lst <- order_lst[(end_train + 1):23]
+    
+    # 建立SARIMA模型
+    sarima_model <- tryCatch(
+      {
+        Arima(train_order_lst, order = c(p, d, q), 
+              seasonal = list(order = c(P, D, Q), period = m), 
+              method = "ML")
+      },
+      error = function(e) {
+        # 如果模型无法收敛，返回错误对象
+        e
+      }
+    )
+    
+    # 检查模型是否成功
+    if (!inherits(sarima_model, "error")) {
+      # 使用SARIMA模型进行预测
+      sarima_forecast <- forecast(sarima_model, h = 7)
+      
+      # 计算RMSE
+      if (length(validation_order_lst) > 0) {
+        sarima_rmse <- sqrt(mean((sarima_forecast$mean[1:length(validation_order_lst)] - validation_order_lst)^2))
+      } else {
+        sarima_rmse <- NA
+      }
+      
+      # 存储预测结果和RMSE
+      predictions[, j] <- sarima_forecast$mean
+      rmses[j] <- sarima_rmse
+    }
+  }
+  
+  # 计算每个预测日的均值作为最终预测结果
+  final_forecast <- rowMeans(predictions, na.rm = TRUE)
+  final_rmse <- mean(rmses, na.rm = TRUE)
+  
+  # 将均值结果存储到数据框
+  sarima3_forecast_df <- rbind(sarima3_forecast_df, 
+                              data.frame(Name = store_name, SKU = sku_type,
+                                         `24` = round(final_forecast[1], 2),
+                                         `25` = round(final_forecast[2], 2),
+                                         `26` = round(final_forecast[3], 2),
+                                         `27` = round(final_forecast[4], 2),
+                                         `28` = round(final_forecast[5], 2),
+                                         `29` = round(final_forecast[6], 2),
+                                         `30` = round(final_forecast[7], 2),
+                                         RMSE = round(final_rmse, 2)))
+}
+
+# 查看SARIMA模型预测结果和RMSE
+print(sarima3_forecast_df)
+
+```
+
+分成四组
+```{r}
+# 设置SARIMA模型参数
+p <- 1  # 自回归项阶数
+d <- 1  # 差分阶数
+q <- 1  # 移动平均项阶数
+
+P <- 0  # 季节性自回归项阶数（设置为0以简化模型）
+D <- 1  # 季节性差分阶数
+Q <- 0  # 季节性移动平均项阶数（设置为0以简化模型）
+m <- 7  # 季节长度（7天为一个周期）
+
+# 初始化 SARIMA 预测结果数据框
+sarima4_forecast_df <- data.frame(Name = character(), SKU = character(), 
+                                 `24` = numeric(), `25` = numeric(), `26` = numeric(), 
+                                 `27` = numeric(), `28` = numeric(), `29` = numeric(), 
+                                 `30` = numeric(), RMSE = numeric(), stringsAsFactors = FALSE)
+
+# 定义每组的起始和结束位置
+groups <- list(c(1, 13),  # 第一组训练集：第1-13天
+               c(6, 18),  # 第二组训练集：第6-18天
+               c(11, 22), # 第三组训练集：第11-22天
+               c(16, 23)) # 第四组训练集：第16-23天
+
+for (i in 1:nrow(past_order)) {
+  # 提取门店名称和商品类型
+  store_name <- past_order[i, "Name"]
+  sku_type <- past_order[i, "SKU"]
+  
+  # 提取该门店的历史订单数据
+  order_lst <- as.numeric(past_order[i, 3:ncol(past_order)])
+  
+  # 存储每组的预测值和RMSE
+  predictions <- matrix(NA, nrow = 7, ncol = length(groups))
+  rmses <- numeric(length(groups))
+  
+  for (j in seq_along(groups)) {
+    group <- groups[[j]]
+    start_train <- group[1]
+    end_train <- group[2]
+    
+    # 将数据分成训练集和验证集
+    train_order_lst <- order_lst[start_train:end_train]
+    validation_order_lst <- order_lst[(end_train + 1):23]
+    
+    # 建立SARIMA模型
+    sarima_model <- tryCatch(
+      {
+        Arima(train_order_lst, order = c(p, d, q), 
+              seasonal = list(order = c(P, D, Q), period = m), 
+              method = "ML")
+      },
+      error = function(e) {
+        # 如果模型无法收敛，返回错误对象
+        e
+      }
+    )
+    
+    # 检查模型是否成功
+    if (!inherits(sarima_model, "error")) {
+      # 使用SARIMA模型进行预测
+      sarima_forecast <- forecast(sarima_model, h = 7)
+      
+      # 计算RMSE
+      if (length(validation_order_lst) > 0) {
+        sarima_rmse <- sqrt(mean((sarima_forecast$mean[1:length(validation_order_lst)] - validation_order_lst)^2))
+      } else {
+        sarima_rmse <- NA
+      }
+      
+      # 存储预测结果和RMSE
+      predictions[, j] <- sarima_forecast$mean
+      rmses[j] <- sarima_rmse
+    }
+  }
+  
+  # 计算每个预测日的均值作为最终预测结果
+  final_forecast <- rowMeans(predictions, na.rm = TRUE)
+  final_rmse <- mean(rmses, na.rm = TRUE)
+  
+  # 将均值结果存储到数据框
+  sarima4_forecast_df <- rbind(sarima4_forecast_df, 
+                              data.frame(Name = store_name, SKU = sku_type,
+                                         `24` = round(final_forecast[1], 2),
+                                         `25` = round(final_forecast[2], 2),
+                                         `26` = round(final_forecast[3], 2),
+                                         `27` = round(final_forecast[4], 2),
+                                         `28` = round(final_forecast[5], 2),
+                                         `29` = round(final_forecast[6], 2),
+                                         `30` = round(final_forecast[7], 2),
+                                         RMSE = round(final_rmse, 2)))
+}
+
+# 查看SARIMA模型预测结果和RMSE
+print(sarima4_forecast_df)
+```
+
+横向比较不同分组的SARIMA模型，以上海国内水果为例。
+```{r}
+library(ggplot2)
+library(tidyr)
+
+# 提取实际订单数据并计算其长度
+actual_order_lst <- as.numeric(shanghai_data[1, 3:ncol(shanghai_data)])
+actual_length <- length(actual_order_lst)
+
+# 确保预测数据的长度为7
+predicted_length <- 7
+
+# 提取四种模型的预测结果
+sarima_forecast <- sarima_forecast_df[sarima_forecast_df$Name == "shang-hai-shi", ]
+sarima2_forecast <- sarima2_forecast_df[sarima2_forecast_df$Name == "shang-hai-shi", ]
+sarima3_forecast <- sarima3_forecast_df[sarima3_forecast_df$Name == "shang-hai-shi", ]
+sarima4_forecast <- sarima4_forecast_df[sarima4_forecast_df$Name == "shang-hai-shi", ]
+
+# 整合到一个数据框中
+SARIMA_df <- data.frame(
+  Date = 1:30,
+  Actual = c(actual_order_lst, rep(NA, predicted_length)),  # 确保实际数据+预测数据总长度为30天
+  SARIMA = c(actual_order_lst, as.numeric(sarima_forecast[1, 3:(3 + predicted_length - 1)])),
+  SARIMA2 = c(actual_order_lst, as.numeric(sarima2_forecast[1, 3:(3 + predicted_length - 1)])),
+  SARIMA3 = c(actual_order_lst, as.numeric(sarima3_forecast[1, 3:(3 + predicted_length - 1)])),
+  SARIMA4 = c(actual_order_lst, as.numeric(sarima4_forecast[1, 3:(3 + predicted_length - 1)]))
+)
+
+# 将数据转换为长格式，以便 ggplot2 绘图
+SARIMA_df_long <- SARIMA_df %>%
+  gather(key = "Model", value = "Order", -Date)
+
+# 绘制折线图
+p2 <- ggplot(SARIMA_df_long, aes(x = Date, y = Order, color = Model, group = Model)) +
+  # 先绘制四个SARIMA模型
+  geom_line(data = subset(SARIMA_df_long, Model != "Actual"), size = 1, alpha = 0.7) +  
+  geom_point(data = subset(SARIMA_df_long, Model != "Actual"), size = 2, alpha = 0.7) +
+  # 最后绘制'Actual'模型，这样它会覆盖其他模型
+  geom_line(data = subset(SARIMA_df_long, Model == "Actual"), size = 1.5, alpha = 1) +  
+  geom_point(data = subset(SARIMA_df_long, Model == "Actual"), size = 3, alpha = 1) +
+  labs(title = "", 
+       x = "Date (2016/6/)", y = "Order Demand (ton)",
+       color = "Type") +
+  scale_x_continuous(breaks = 1:30) +  
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("my_plot2.jpg", plot = p2, width = 8, height = 6, dpi = 300)
+```
+
+```{r}
+# 整合到一个数据框中
+SARIMA1_df <- data.frame(
+  Date = 1:30,
+  Actual = c(actual_order_lst, rep(NA, predicted_length)),  # 确保实际数据+预测数据总长度为30天
+  SARIMA = c(actual_order_lst, as.numeric(sarima_forecast[1, 3:(3 + predicted_length - 1)]))
+)
+
+# 将数据转换为长格式，以便 ggplot2 绘图
+SARIMA1_df_long <- SARIMA1_df %>%
+  gather(key = "Model", value = "Order", -Date)
+
+# 绘制折线图
+p3 <- ggplot(SARIMA1_df_long, aes(x = Date, y = Order, color = Model, group = Model)) +
+  # 先绘制SARIMA模型
+  geom_line(data = subset(SARIMA1_df_long, Model != "Actual"), size = 1, alpha = 0.7) +  
+  geom_point(data = subset(SARIMA1_df_long, Model != "Actual"), size = 2, alpha = 0.7) +
+  # 最后绘制'Actual'模型，这样它会覆盖其他模型
+  geom_line(data = subset(SARIMA1_df_long, Model == "Actual"), size = 1.5, alpha = 1) +  
+  geom_point(data = subset(SARIMA1_df_long, Model == "Actual"), size = 3, alpha = 1) +
+  labs(title = "", 
+       x = "Date (2016/6/)", y = "Order Demand (ton)",
+       color = "Type") +
+  scale_x_continuous(breaks = 1:30) +  
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1))
+
+ggsave("my_plot3.jpg", plot = p3, width = 8, height = 6, dpi = 300)
+```
+
+```{r}
+# 定义保存路径，桌面路径通常是用户目录下的Desktop文件夹
+desktop_path <- "C:/Users/29187/Desktop/SARIMA_forecast_results.xlsx"  # 请根据你的用户名调整路径
+
+# 创建一个新的工作簿
+wb <- createWorkbook()
+
+# 添加第一个工作表
+addWorksheet(wb, "SARIMA Forecast 1")
+writeData(wb, sheet = "SARIMA Forecast 1", x = sarima1_forecast_df)
+
+# 添加第二个工作表
+addWorksheet(wb, "SARIMA Forecast 2")
+writeData(wb, sheet = "SARIMA Forecast 2", x = sarima2_forecast_df)
+
+# 添加第三个工作表
+addWorksheet(wb, "SARIMA Forecast 3")
+writeData(wb, sheet = "SARIMA Forecast 3", x = sarima3_forecast_df)
+
+# 添加第四个工作表
+addWorksheet(wb, "SARIMA Forecast 4")
+writeData(wb, sheet = "SARIMA Forecast 4", x = sarima4_forecast_df)
+
+# 保存Excel文件到桌面
+saveWorkbook(wb, file = desktop_path, overwrite = TRUE)
+
+# 提示操作完成
+cat("SARIMA四种预测结果已生成新的Excel文件，并保存在桌面。\n")
+```
